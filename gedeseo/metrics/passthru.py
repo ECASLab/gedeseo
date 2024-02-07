@@ -8,5 +8,5 @@ from numpy import array
 from gedeseo.metric import Metric
 
 class PassThruMetric(Metric):
-    def Extract(self, evalres: dict) -> array:
-        return array(list(dict.values()))
+    def extract(self, evalres):
+        return evalres

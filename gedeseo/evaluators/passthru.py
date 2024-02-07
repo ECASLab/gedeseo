@@ -8,5 +8,5 @@ from numpy import array
 from gedeseo.evaluator import Evaluator
 
 class PassThruEvaluator(Evaluator):
-    def Evaluate(self, config: list) -> list:
+    def evaluate(self, config):
         return config

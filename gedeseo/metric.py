@@ -8,5 +8,5 @@ from numpy import array
 
 class Metric(ABC):
     @abstractmethod
-    def Extract(self, evalres):
+    def extract(self, evalres):
         pass

@@ -5,3 +5,5 @@
 import gedeseo.evaluators
 import gedeseo.metrics
 import gedeseo.optimizers
+
+from gedeseo.gedeseo import *

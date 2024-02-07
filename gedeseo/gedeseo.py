@@ -24,13 +24,17 @@ class Gedeseo:
         self._optimizer = None
         pass
 
-    def find(self) -> array:
-        pass
+    def find(self, params):
+        return self._optimizer.optimize(
+            evaluator=self._evaluator,
+            metrics=self._metrics,
+            params=params
+        )
 
     def attach_evaluator(self, evaluator: Evaluator):
         self._evaluator = evaluator
 
-    def attach_metrics(self, metrics: list(Metric)):
+    def attach_metrics(self, metrics):
         self._metrics += metrics
 
     def attach_optimizer(self, optimizer: Optimizer):

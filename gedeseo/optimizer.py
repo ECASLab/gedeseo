@@ -10,5 +10,5 @@ from gedeseo.metric import Metric
 
 class Optimizer(ABC):
     @abstractmethod
-    def optimize(self):
+    def optimize(self, **kwargs):
         pass

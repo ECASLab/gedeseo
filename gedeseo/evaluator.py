@@ -8,5 +8,5 @@ from numpy import array
 
 class Evaluator(ABC):
     @abstractmethod
-    def Evaluate(self, config: list) -> list:
+    def evaluate(self):
         pass

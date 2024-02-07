@@ -39,7 +39,7 @@ class ParticleSwarmOptimizer(Optimizer):
     def attach_cost_function(self, func):
         self._compute_cost_function = func
 
-    def optimize(self):
+    def optimize(self, **kwargs):
         if not self._compute_cost_function:
             raise NotImplementedError(
                 "Cannot optimize without a cost function")
@@ -48,7 +48,8 @@ class ParticleSwarmOptimizer(Optimizer):
             self._compute_cost_function,
             iters=self._iters,
             n_processes=self._nproc,
-            verbose=False
+            verbose=False,
+            **kwargs
         )
 
         return {"cost": cost, "points": pos, "iters": self._iters}
