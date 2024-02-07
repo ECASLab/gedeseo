@@ -10,9 +10,5 @@ from gedeseo.metric import Metric
 
 class Optimizer(ABC):
     @abstractmethod
-    def ComputeCost(self, points, metrics):
-        pass
-
-    @abstractmethod
-    def Optimize(self):
+    def optimize(self):
         pass
