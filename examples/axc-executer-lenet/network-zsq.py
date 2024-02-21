@@ -9,6 +9,7 @@ from dse.template import fill_template
 from dse.utils import print_header
 from dse.launcher import run_process
 
+import gedeseo as gd
 from gedeseo.evaluator import Evaluator
 from gedeseo.metric import Metric
 
@@ -158,9 +159,11 @@ class AxCExecuterEvaluator(Evaluator):
         config = vec_to_params(vec)
         # Compute the resources (as an aggregation)
         resources = np.array([0., 0., 0., 0.])
+        min_q = 100
 
         for layertype in config:
             for layer in config[layertype]:
+                min_q = min(layer[0]["BW"], min_q)
                 res = np.array([func(layer[0]["BW"])
                                for func in self._interpolation[layertype]])
                 resources += res
@@ -233,19 +236,24 @@ class ResourcesMetric(Metric):
         return usage.max()
 
 
-def cost_function(V, **kwargs):
+def cost_function(Vi, **kwargs):
     # Get the CPU affinity
-    builddir = kwargs["builddir"]
+    builddir = kwargs["params"]["builddir"]
     coreid = psutil.Process().cpu_num()
     iterbuild = get_iterbuild(builddir, coreid)
 
     # Get the Gedeseo instances
     axceval = kwargs["evaluator"]
-    commsmetric = kwargs["comm-metric"]
-    accmetric = kwargs["acc-metric"]
-    resmetric = kwargs["res-metric"]
+    commsmetric = kwargs["metrics"][0]
+    accmetric = kwargs["metrics"][1]
+    resmetric = kwargs["metrics"][2]
 
-    weights = kwargs["weights"]
+    V = np.array([[int(xi) if xi > 0 else 0 for xi in row] for row in Vi])
+    print("-----------------------------------")
+    print(V)
+    print("-----------------------------------")
+
+    weights = kwargs["params"]["weights"]
 
     # Evaluate
     evalres = [axceval.evaluate(v, iterbuild) for v in V]
@@ -311,9 +319,42 @@ if __name__ == "__main__":
         "weights": weights
     }
 
-    # Execute gedeseo
-    vals = cost_function([params_to_vec(params)], **args)
-    print(vals)
+    # Configure the optimizer
+    n_particles = 10
+    dimensions = 10
+    n_threads = 1
+    iterations = 10
+    init_position = np.array([params_to_vec(params) for i in range(n_particles)], dtype=np.float64)
 
-    filled_template = fill_template(template_name, params)
+    # Set-up hyperparameters
+    options = {'c1': 0.8, 'c2': 0.5, 'w': 1.}
+
+    # Create the optimizer
+    optimizer = gd.optimizers.ParticleSwarmOptimizer(
+        npart=n_particles,
+        dimensions=dimensions,
+        options=options,
+        nproc=n_threads,
+        iters=iterations,
+        initpos=init_position,
+    )
+
+    # Attach the cost function
+    optimizer.attach_cost_function(cost_function)
+    # Assemble the Gedeseo
+    gdseo = gd.Gedeseo()
+    gdseo.attach_evaluator(axceval)
+    gdseo.attach_metrics([commsmetric, accmetric, resmetric])
+    gdseo.attach_optimizer(optimizer)
+
+    # Run
+    res = gdseo.find(args)
+    print(res)
+
+    # Execute gedeseo
+    #vals = cost_function([params_to_vec(params)], **args)
+    #print(vals)
+
+    #filled_template = fill_template(template_name, params)
+    #print(filled_template)
     # print(filled_template)
