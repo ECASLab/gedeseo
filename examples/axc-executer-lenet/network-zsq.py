@@ -2,10 +2,15 @@
 
 import os
 import psutil
+import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 from dse.template import fill_template
 from dse.utils import print_header
 from dse.launcher import run_process
+
+from gedeseo.evaluator import Evaluator
+from gedeseo.metric import Metric
 
 '''
   Each configuration must have the following control params (optimisable):
@@ -38,6 +43,17 @@ params = [
     ]
 ]
 
+params2 = [
+    [
+        {"BW": 16, "IW": 5, "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1},
+        {"BW": 16, "IW": 5, "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1}
+    ], [
+        {"BW": 16, "IW": 5, "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1},
+        {"BW": 16, "IW": 5, "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1},
+        {"BW": 14, "IW": 6, "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1}
+    ]
+]
+
 
 def params_to_vec(params):
     '''
@@ -49,6 +65,7 @@ def params_to_vec(params):
             vec.append(config["BW"])
             vec.append(config["IW"])
     return vec
+
 
 def vec_to_params(vec):
     '''
@@ -63,11 +80,15 @@ def vec_to_params(vec):
             bw = vec[i]
             iw = vec[i + 1]
             i += 2
-            param = {"BW": bw, "IW": iw, "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1},
+            param = {"BW": bw, "IW": iw,
+                     "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1},
             params[len(params) - 1].append(param)
     return params
 
+
 setup_script_name = os.path.join(dirname, "setup.bash")
+
+
 def parse_setup(res):
     '''
     Parses the setup results to get the dirname, the name of the repo
@@ -82,12 +103,94 @@ def parse_setup(res):
         dictfiles[k] = v
     return dictfiles
 
+
 create_env_script_name = os.path.join(dirname, "create-env.bash")
+
+
 def get_iterbuild(builddir, cpuid):
     '''
     Gets the respective build based on the cpuid
     '''
     return os.path.join(builddir, f"build-{cpuid}")
+
+
+class AxCExecuterEvaluator(Evaluator):
+    '''
+    Evaluates the params vector into the AxC Executer framework
+
+    It fills the template, copies it to the proper location and runs the
+    simulation, collecting the key results
+    '''
+
+    def evaluate(self, vec, iterbuild):
+        config = vec_to_params(vec)
+        res = {
+            "config": config,
+            "vec": vec,
+            "iterbuild": iterbuild,
+            "accuracy": 0.95,
+            "resources": [2500, 6500, 3, 2]  # lut, ff, dsp, bram
+        }
+        return res
+
+
+class CommunicationMetric(Metric):
+    '''
+    Evaluates how heavy the communication is in terms of a 64-bit bus
+
+    You want to have less communication overhead (bw/bus)
+    '''
+
+    def __init__(self, bus=64):
+        self._bus = bus
+
+    def extract(self, evalres):
+        vec = evalres["vec"]
+        bws = [vec[int(2 * i)] for i in range(len(vec) // 2)]
+        maxbw = np.array(bws).max()
+        return maxbw / 64
+
+
+class AccuracyMetric(Metric):
+    '''
+    Evaluates how accurate is the prediction
+
+    You want to minimise the 1 - acc
+    '''
+
+    def __init__(self, threshold=0.8):
+        self._acceptable_acc = threshold
+
+    def extract(self, evalres):
+        acc = evalres["accuracy"]
+        if acc < self._acceptable_acc:
+            acc = 0
+
+        return 1 - acc
+
+
+class ResourcesMetric(Metric):
+    '''
+    Evaluates how consuming is the network in terms of resources according to
+    the configuration
+
+    We want to minimise the resources overall
+    '''
+
+    def __init__(self, platform_details):
+        self._luts = platform_details["luts"]
+        self._ffs = platform_details["ffs"]
+        self._brams = platform_details["brams"]
+        self._dsps = platform_details["dsps"]
+        # lut, ff, dsp, bram
+        self._resources = np.array(
+            [self._luts, self._ffs, self._dsps, self._brams])
+
+    def extract(self, evalres):
+        evalres = np.array(evalres["resources"])
+        usage = evalres / self._resources
+        return usage.max()
+
 
 def cost_function(V, **kwargs):
     # Get the CPU affinity
@@ -95,8 +198,28 @@ def cost_function(V, **kwargs):
     coreid = psutil.Process().cpu_num()
     iterbuild = get_iterbuild(builddir, coreid)
 
+    # Get the Gedeseo instances
+    axceval = kwargs["evaluator"]
+    commsmetric = kwargs["comm-metric"]
+    accmetric = kwargs["acc-metric"]
+    resmetric = kwargs["res-metric"]
 
-    return 0
+    weights = kwargs["weights"]
+
+    # Evaluate
+    evalres = [axceval.evaluate(v, iterbuild) for v in V]
+
+    # Get metrics
+    commres = [(weights["comms"] * commsmetric.extract(r)) for r in evalres]
+    accres = [(weights["acc"] * accmetric.extract(r)) for r in evalres]
+    resres = [(weights["res"] * resmetric.extract(r)) for r in evalres]
+
+    # Assembly into a single numpy
+    bipartite = np.array([commres, accres, resres]).T
+    costs = bipartite.sum(axis=1)
+
+    return costs
+
 
 if __name__ == "__main__":
     print_header()
@@ -111,7 +234,46 @@ if __name__ == "__main__":
     # Setup environment
     ncores = os.cpu_count()
     for i in range(ncores):
-        run_process(f"bash {create_env_script_name} {i} {builddir} {sourcedir}", all_env)
+        run_process(
+            f"bash {create_env_script_name} {i} {builddir} {sourcedir}", all_env)
+
+    # FPGA Params - K26C
+    platform_details = {
+        "luts": 37530,
+        "ffs": 18600,
+        "brams": 200,
+        "dsps": 178
+    }
+
+    # Minimum accuracy
+    min_acc = 0.75
+
+    # Priorities - all same (the sum must be 1)
+    weights = {
+        "comms": 0.33,
+        "acc": 0.33,
+        "res": 0.33
+    }
+
+    # Gedeseo params
+    axceval = AxCExecuterEvaluator()
+    commsmetric = CommunicationMetric()
+    accmetric = AccuracyMetric(min_acc)
+    resmetric = ResourcesMetric(platform_details)
+
+    args = {
+        "builddir": builddir,
+        "evaluator": axceval,
+        "comm-metric": commsmetric,
+        "acc-metric": accmetric,
+        "res-metric": resmetric,
+        "weights": weights
+    }
+
+    # Execute gedeseo
+    vals = cost_function([params_to_vec(params), params_to_vec(
+        params2), params_to_vec(params)], **args)
+    print(vals)
 
     filled_template = fill_template(template_name, params)
-    #print(filled_template)
+    # print(filled_template)

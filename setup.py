@@ -42,6 +42,8 @@ setup(
     install_requires=[
         "psutil >= 5.9.8",
         "pyswarms >= 1.3.0",
+        "scipy >= 1.5.0",
+        "numpy >= 1.19.1",
     ],
     command_options={
         'build_sphinx': {
