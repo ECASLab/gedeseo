@@ -3,7 +3,7 @@
 import os
 import psutil
 import numpy as np
-from scipy.optimize import linear_sum_assignment
+from scipy import interpolate
 
 from dse.template import fill_template
 from dse.utils import print_header
@@ -27,32 +27,22 @@ from gedeseo.metric import Metric
       - DBA: number of approximate bits for additions. Set to: 1 for simplicity
       - DBA: number of approximate bits for additions. Set to: 1 for simplicity
 '''
-params_config = [2, 3]
+params_config = {"conv": 2, "dense": 3}
 
 dirname = os.path.dirname(os.path.abspath(__file__))
 template_name = os.path.join(dirname, "templates", "config.hpp.in")
 
-params = [
-    [
+# TODO: fix the layers. Instead of having arrays, a dictionary
+params = {
+    "conv": [
         {"BW": 14, "IW": 6, "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1},
         {"BW": 14, "IW": 6, "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1}
-    ], [
+    ], "dense": [
         {"BW": 14, "IW": 6, "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1},
         {"BW": 14, "IW": 6, "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1},
         {"BW": 14, "IW": 6, "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1}
     ]
-]
-
-params2 = [
-    [
-        {"BW": 16, "IW": 5, "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1},
-        {"BW": 16, "IW": 5, "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1}
-    ], [
-        {"BW": 16, "IW": 5, "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1},
-        {"BW": 16, "IW": 5, "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1},
-        {"BW": 14, "IW": 6, "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1}
-    ]
-]
+}
 
 
 def params_to_vec(params):
@@ -61,7 +51,7 @@ def params_to_vec(params):
     '''
     vec = []
     for layertype in params:
-        for config in layertype:
+        for config in params[layertype]:
             vec.append(config["BW"])
             vec.append(config["IW"])
     return vec
@@ -72,17 +62,17 @@ def vec_to_params(vec):
     Converts the vector to params structure
     '''
     global params_config
-    params = []
+    params = {}
     i = 0
     for layertype in params_config:
-        params.append([])
-        for layers in range(layertype):
+        params[layertype] = []
+        for layers in range(params_config[layertype]):
             bw = vec[i]
             iw = vec[i + 1]
             i += 2
             param = {"BW": bw, "IW": iw,
                      "ART": "EXACT,EXACT", "DBA": 1, "DBM": 1},
-            params[len(params) - 1].append(param)
+            params[layertype].append(param)
     return params
 
 
@@ -122,14 +112,65 @@ class AxCExecuterEvaluator(Evaluator):
     simulation, collecting the key results
     '''
 
+    def __init__(self):
+        # TODO: do the following from a file or from pure synthesis
+        # Convolution scale:
+        self._conv_consumption = {
+            "bw": [4, 6, 8, 10, 12, 16],
+            "luts": [2673, 3528, 4182, 4963, 2494, 2762],
+            "ffs": [1993, 2905, 3186, 3465, 3918, 4719],
+            "dsps": [1, 1, 1, 1, 37, 37],
+            "brams": [0, 0, 0, 0, 0, 0]
+        }
+        # Dense scale:
+        self._dense_consumption = {
+            "bw": [4, 8, 10, 12, 14, 16],
+            "luts": [2112, 2443, 2655, 2199, 2247, 2295],
+            "ffs": [1614, 2008, 2191, 2472, 2672, 2873],
+            "dsps": [1, 1, 1, 9, 9, 9],
+            "brams": [0, 0, 0, 0, 0, 0]
+        }
+        # Interpolation functions
+        self._interpolation = {
+            "conv": [
+                interpolate.interp1d(
+                    self._conv_consumption["bw"], self._conv_consumption["luts"]),  # lut
+                interpolate.interp1d(
+                    self._conv_consumption["bw"], self._conv_consumption["ffs"]),  # ff
+                interpolate.interp1d(
+                    self._conv_consumption["bw"], self._conv_consumption["dsps"]),  # dsp
+                interpolate.interp1d(
+                    self._conv_consumption["bw"], self._conv_consumption["brams"])  # bram
+            ],
+            "dense": [
+                interpolate.interp1d(
+                    self._dense_consumption["bw"], self._dense_consumption["luts"]),  # lut
+                interpolate.interp1d(
+                    self._dense_consumption["bw"], self._dense_consumption["ffs"]),  # ff
+                interpolate.interp1d(
+                    self._dense_consumption["bw"], self._dense_consumption["dsps"]),  # dsp
+                interpolate.interp1d(
+                    self._dense_consumption["bw"], self._dense_consumption["brams"])  # bram
+            ]
+        }
+
     def evaluate(self, vec, iterbuild):
         config = vec_to_params(vec)
+        # Compute the resources (as an aggregation)
+        resources = np.array([0., 0., 0., 0.])
+
+        for layertype in config:
+            for layer in config[layertype]:
+                res = np.array([func(layer[0]["BW"])
+                               for func in self._interpolation[layertype]])
+                resources += res
+
         res = {
             "config": config,
             "vec": vec,
             "iterbuild": iterbuild,
             "accuracy": 0.95,
-            "resources": [2500, 6500, 3, 2]  # lut, ff, dsp, bram
+            "resources": resources  # lut, ff, dsp, bram
         }
         return res
 
@@ -271,8 +312,7 @@ if __name__ == "__main__":
     }
 
     # Execute gedeseo
-    vals = cost_function([params_to_vec(params), params_to_vec(
-        params2), params_to_vec(params)], **args)
+    vals = cost_function([params_to_vec(params)], **args)
     print(vals)
 
     filled_template = fill_template(template_name, params)

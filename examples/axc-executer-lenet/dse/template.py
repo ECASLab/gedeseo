@@ -43,8 +43,8 @@ def reconstruct_layers(params):
     '''
     layers = []
     # Reconstruct the main layers -> three per element
-    convlayers = params[0]
-    denselayers = params[1]
+    convlayers = params["conv"]
+    denselayers = params["dense"]
 
     # Reconstruct the conv layers
     for layer in convlayers:
@@ -79,8 +79,8 @@ def reconstruct_accel_configs(params):
     '''
     configlayers = []
     # Reconstruct the main layers -> three per element
-    convlayers = params[0]
-    denselayers = params[1]
+    convlayers = params["conv"]
+    denselayers = params["dense"]
 
     # Reconstruct the conv layers
     for layer in convlayers:
