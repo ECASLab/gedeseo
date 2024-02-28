@@ -48,17 +48,19 @@ def reconstruct_layers(params):
 
     # Reconstruct the conv layers
     for layer in convlayers:
+        layer = layer[0]
         layers.append("    {" + f"{layer['BW']}, {layer['IW']}" + "}") # clayer
         layers.append("    {" + f"{layer['BW']}, {layer['IW']}" + "}") # alayer
         layers.append("    {" + f"{layer['BW']}, {layer['IW']}" + "}") # player
 
     # Reconstruct the dense layers
     for layer in denselayers:
+        layer = layer[0]
         layers.append("    {" + f"{layer['BW']}, {layer['IW']}" + "}") # dlayer
         layers.append("    {" + f"{layer['BW']}, {layer['IW']}" + "}") # alayer
     
     # Reconstruct the softmax layer
-    layer = denselayers[-1]
+    layer = denselayers[-1][0]
     layers.append("    {" + f"{layer['BW']}, {layer['IW']}" + "}") # slayer
 
     return layers
@@ -84,6 +86,7 @@ def reconstruct_accel_configs(params):
 
     # Reconstruct the conv layers
     for layer in convlayers:
+        layer = layer[0]
         CONVART = layer['ART'].split(',')[0]
         ADDART = layer['ART'].split(',')[1]
         # clayer
@@ -95,6 +98,7 @@ def reconstruct_accel_configs(params):
 
     # Reconstruct the dense layers
     for layer in denselayers:
+        layer = layer[0]
         DENSEART = layer['ART'].split(',')[0]
         ADDART = layer['ART'].split(',')[1]
         # dlayer
@@ -125,7 +129,7 @@ def reconstruct_accels(num_accels):
         accel = f"""    std::make_shared<Accelerator<
         std::get<0>(kAccelConfigs[{i}]), std::get<1>(kAccelConfigs[{i}]),
         std::get<2>(kAccelConfigs[{i}]), std::get<3>(kAccelConfigs[{i}]),
-        std::get<4>(kAccelConfigs[{i}]), std::get<5>(kAccelConfigs[{i}])>>()"""
+        std::get<4>(kAccelConfigs[{i}]), std::get<5>(kAccelConfigs[{i}])>>(kAccelConfigs[{i}])"""
         accels.append(accel)
     
     return accels

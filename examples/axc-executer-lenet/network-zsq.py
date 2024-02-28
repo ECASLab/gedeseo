@@ -4,6 +4,7 @@ import os
 import psutil
 import numpy as np
 from scipy import interpolate
+from filelock import FileLock
 
 from dse.template import fill_template
 from dse.utils import print_header
@@ -32,6 +33,13 @@ params_config = {"conv": 2, "dense": 3}
 
 dirname = os.path.dirname(os.path.abspath(__file__))
 template_name = os.path.join(dirname, "templates", "config.hpp.in")
+
+setup_script_name = os.path.join(dirname, "setup.bash")
+create_env_script_name = os.path.join(dirname, "create-env.bash")
+compile_script_name = os.path.join(dirname, "compile.bash")
+run_axce_script_name = os.path.join(dirname, "run-job.bash")
+
+filelock_name_suffix = "gedeseo.lock"
 
 # TODO: fix the layers. Instead of having arrays, a dictionary
 params = {
@@ -77,9 +85,6 @@ def vec_to_params(vec):
     return params
 
 
-setup_script_name = os.path.join(dirname, "setup.bash")
-
-
 def parse_setup(res):
     '''
     Parses the setup results to get the dirname, the name of the repo
@@ -93,9 +98,6 @@ def parse_setup(res):
         v = kv[1].replace(' ', '')
         dictfiles[k] = v
     return dictfiles
-
-
-create_env_script_name = os.path.join(dirname, "create-env.bash")
 
 
 def get_iterbuild(builddir, cpuid):
@@ -115,6 +117,7 @@ class AxCExecuterEvaluator(Evaluator):
 
     def __init__(self):
         # TODO: do the following from a file or from pure synthesis
+        self._acc = []
         # Convolution scale:
         self._conv_consumption = {
             "bw": [4, 6, 8, 10, 12, 16],
@@ -155,8 +158,33 @@ class AxCExecuterEvaluator(Evaluator):
             ]
         }
 
+    def launch_acc_simulation(self, params, iterbuild):
+        # Fill and write template
+        filled_template = fill_template(template_name, params)
+        f = open(f"{iterbuild}/examples/mqlenet5/config.hpp", "w")
+        f.write(filled_template)
+        f.close()
+
+        # Execute the compilation
+        res = run_process(f"bash {compile_script_name} {iterbuild}", all_env)
+        if res['code'] != 0:
+            print("Error: Cannot compilation iteration: ", iterbuild)
+            return 0.
+
+        # Execute run
+        res = run_process(f"bash {run_axce_script_name} {iterbuild}", all_env)
+        if res['code'] != 0:
+            print("Error: Cannot run iteration: ", iterbuild)
+            return 0.
+
+        return float(res['stdout'])
+
     def evaluate(self, vec, iterbuild):
         config = vec_to_params(vec)
+        buildno = iterbuild.split('/')[-1]
+        print("Iteration on CPU:", buildno, "Vec:", vec)
+        acc = self.launch_acc_simulation(config, iterbuild)
+        print("\t", "Config:", vec, "Acc:", acc)
         # Compute the resources (as an aggregation)
         resources = np.array([0., 0., 0., 0.])
         min_q = 100
@@ -172,7 +200,7 @@ class AxCExecuterEvaluator(Evaluator):
             "config": config,
             "vec": vec,
             "iterbuild": iterbuild,
-            "accuracy": 0.95,
+            "accuracy": acc,
             "resources": resources  # lut, ff, dsp, bram
         }
         return res
@@ -240,6 +268,9 @@ def cost_function(Vi, **kwargs):
     # Get the CPU affinity
     builddir = kwargs["params"]["builddir"]
     coreid = psutil.Process().cpu_num()
+
+    lock = FileLock(f"{coreid}-{filelock_name_suffix}")
+    lock.acquire()
     iterbuild = get_iterbuild(builddir, coreid)
 
     # Get the Gedeseo instances
@@ -249,9 +280,6 @@ def cost_function(Vi, **kwargs):
     resmetric = kwargs["metrics"][2]
 
     V = np.array([[int(xi) if xi > 0 else 0 for xi in row] for row in Vi])
-    print("-----------------------------------")
-    print(V)
-    print("-----------------------------------")
 
     weights = kwargs["params"]["weights"]
 
@@ -267,6 +295,8 @@ def cost_function(Vi, **kwargs):
     bipartite = np.array([commres, accres, resres]).T
     costs = bipartite.sum(axis=1)
 
+    # Return worker
+    lock.release()
     return costs
 
 
@@ -279,10 +309,11 @@ if __name__ == "__main__":
     files = parse_setup(res)
     builddir = os.path.join(files["Dirname"], files["builds"])
     sourcedir = os.path.join(files["Dirname"], files["AxC-Executer"])
-
+    lock = []
     # Setup environment
     ncores = os.cpu_count()
     for i in range(ncores):
+        lock.append(FileLock(f"{i}-{filelock_name_suffix}"))
         run_process(
             f"bash {create_env_script_name} {i} {builddir} {sourcedir}", all_env)
 
@@ -316,15 +347,16 @@ if __name__ == "__main__":
         "comm-metric": commsmetric,
         "acc-metric": accmetric,
         "res-metric": resmetric,
-        "weights": weights
+        "weights": weights,
     }
 
     # Configure the optimizer
-    n_particles = 10
+    n_particles = 8
     dimensions = 10
-    n_threads = 1
-    iterations = 10
-    init_position = np.array([params_to_vec(params) for i in range(n_particles)], dtype=np.float64)
+    n_threads = 8
+    iterations = 20
+    init_position = np.array([params_to_vec(params)
+                             for i in range(n_particles)], dtype=np.float64)
 
     # Set-up hyperparameters
     options = {'c1': 0.8, 'c2': 0.5, 'w': 1.}
@@ -349,12 +381,16 @@ if __name__ == "__main__":
 
     # Run
     res = gdseo.find(args)
-    print(res)
+    print("-------------------------------------------------------------------------------")
+    res["points"] = res["points"].astype(np.int32)
+    print("Results:")
+    print("\tCost:", res["cost"])
+    print("\tConfiguration:", vec_to_params(res["points"]))
 
     # Execute gedeseo
-    #vals = cost_function([params_to_vec(params)], **args)
-    #print(vals)
+    # vals = cost_function([params_to_vec(params)], **args)
+    # print(vals)
 
-    #filled_template = fill_template(template_name, params)
-    #print(filled_template)
+    # filled_template = fill_template(template_name, params)
+    # print(filled_template)
     # print(filled_template)

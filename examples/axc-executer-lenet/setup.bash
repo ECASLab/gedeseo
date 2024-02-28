@@ -16,6 +16,7 @@ cd ..
 
 # Prepare the builds folder
 mkdir -p builds
+rm -r builds/*
 echo "Dirname: ${EXAMPLE_DIRNAME}"
 echo "AxC-Executer: ${AXC_EXECUTER_DIR}"
 echo "builds: builds"

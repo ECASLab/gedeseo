@@ -44,6 +44,7 @@ setup(
         "pyswarms >= 1.3.0",
         "scipy >= 1.5.0",
         "numpy >= 1.19.1",
+        "filelock >= 3.9.0"
     ],
     command_options={
         'build_sphinx': {

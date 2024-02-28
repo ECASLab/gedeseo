@@ -16,7 +16,7 @@ MNIST_OUTPUT=${MNIST_OUTPUT:-examples/benchmark-lenet5/model-tests/mnist-output-
 MNIST_SAMPLES=${MNIST_SAMPLES:-2000}
 
 # Run
-${CMD} ${WEIGHTS} ${MNIST_INPUT} ${MNIST_SAMPLES} ${MNIST_OUTPUT} 3 1> run.out.log 2> run.err.log
+OMP_NUM_THREADS=1 ${CMD} ${WEIGHTS} ${MNIST_INPUT} ${MNIST_SAMPLES} ${MNIST_OUTPUT} 3 1> run.out.log 2> run.err.log
 
 # Collect results
 accuracy=$(cat run.out.log | grep "Accuracy" | awk '{print $2}')
